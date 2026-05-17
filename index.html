@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>مصحح الأوراق الذكي - تقنية المحاذاة الشاملة</title>
+    <title>مصحح الأوراق الإلكتروني - معايرة S23 Ultra</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { background-color: #f1f3f5; font-family: sans-serif; text-align: center; }
@@ -18,7 +18,7 @@
 <body>
 
     <div class="container my-3">
-        <h2 class="text-primary fw-bold mb-1">مصحح الأوراق الإلكتروني السريع 🎯</h2>
+        <h2 class="text-primary fw-bold mb-1">مصحح الأوراق الإلكتروني الفوري 🎯</h2>
         
         <div class="config-box">
             <h5 class="text-primary border-bottom pb-2">🛠️ إعداد مفتاح الإجابة النموذجية</h5>
@@ -67,16 +67,32 @@
         const finalScoreDiv = document.getElementById('final-score');
         const detailsText = document.getElementById('details-text');
         
-        let src, gray, blurred, thresh, contours, hierarchy;
+        let src, gray, thresh, contours, hierarchy;
         let streaming = false;
 
-        navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: 640, height: 480 }, audio: false })
+        // إعدادات الكاميرا المتقدمة المخصصة لـ S23 Ultra (طلب تقريب بؤري حاد ومنع تشتت العدسات)
+        const cameraConstraints = {
+            video: {
+                facingMode: { exact: "environment" },
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+                focusMode: "continuous",
+                whiteBalance: "continuous"
+            },
+            audio: false
+        };
+
+        navigator.mediaDevices.getUserMedia(cameraConstraints)
             .then(stream => { video.srcObject = stream; video.play(); })
-            .catch(err => alert("خطأ في الكاميرا: " + err));
+            .catch(err => {
+                // حل بديل في حال رفض المتصفح قيود الفوكس المتقدمة
+                navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+                    .then(s => { video.srcObject = s; video.play(); });
+            });
 
         function onOpenCvReady() {
             detectionStatus.className = "alert alert-info py-2 mb-2 small text-center";
-            detectionStatus.innerText = "المحرك جاهز! ضع الورقة على خلفية داكنة (مثل الطاولة الخشبية) ليتم التقاطها فوراً...";
+            detectionStatus.innerText = "المحرك جاهز تماماً. وجه الكاميرا للورقة...";
             
             video.addEventListener('canplay', () => {
                 if (!streaming) {
@@ -87,7 +103,6 @@
 
                     src = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
                     gray = new cv.Mat();
-                    blurred = new cv.Mat();
                     thresh = new cv.Mat();
                     contours = new cv.MatVector();
                     hierarchy = new cv.Mat();
@@ -120,60 +135,52 @@
 
             cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
             
-            // تنعيم الصورة للتخلص من أي شوائب صغيرة أو تظليلات خاطئة
-            let ksize = new cv.Size(5, 5);
-            cv.GaussianBlur(gray, blurred, ksize, 0, 0, cv.BORDER_DEFAULT);
-            cv.adaptiveThreshold(blurred, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
-            
-            cv.findContours(thresh, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+            // تحويل للثنائي الحاد لعزل اللون الأسود المصمت تماماً
+            cv.adaptiveThreshold(gray, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 15, 3);
+            cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-            let maxArea = 0;
-            let paperContour = null;
+            let detectedSquares = [];
 
-            // البحث عن أكبر مساحة مستطيلة الشكل في الكاميرا (وهي كامل مساحة الورقة البيضاء)
             for (let i = 0; i < contours.size(); ++i) {
                 let cnt = contours.get(i);
                 let area = cv.contourArea(cnt);
                 
-                // يجب أن تكون المساحة كبيرة كفاية (تمثل ورقة الإجابة مقارنة بحجم الشاشة)
-                if (area > 20000) { 
-                    let perimeter = cv.arcLength(cnt, true);
-                    let approx = new cv.Mat();
-                    cv.approxPolyDP(cnt, approx, 0.02 * perimeter, true);
+                // تصفية هندسية صارمة جداً لعزل الزوايا المربعة عن الدوائر المظلمة
+                if (area > 60 && area < 3500) {
+                    let rect = cv.boundingRect(cnt);
+                    let aspectRatio = rect.width / rect.height;
+                    
+                    // حساب نسبة الامتلاء (المربع المصمت يكون ممتلئاً بنسبة تتجاوز 85% بعكس الدوائر أو الكتابة يدوياً)
+                    let hull = new cv.Mat();
+                    cv.convexHull(cnt, hull);
+                    let hullArea = cv.contourArea(hull);
+                    let solidity = area / hullArea;
+                    hull.delete();
 
-                    if (approx.rows === 4 && area > maxArea) {
-                        maxArea = area;
-                        paperContour = approx.clone();
+                    // شروط المربع الصارمة: نسبة طول لعرض قريبة جداً من 1 وامتداد مصمت ممتاز
+                    if (aspectRatio >= 0.85 && aspectRatio <= 1.15 && solidity > 0.82) {
+                        detectedSquares.push({ x: rect.x + rect.width/2, y: rect.y + rect.height/2, rect: rect });
                     }
-                    approx.delete();
                 }
             }
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            // إذا عثرنا على محيط الورقة الخارجي بالكامل
-            if (paperContour !== null) {
-                detectionStatus.className = "alert alert-success py-2 mb-2 small text-center";
-                detectionStatus.innerText = "🎯 تم تحديد حدود الورقة وجاري القراءة والدرجة فوراً!";
-
-                // فرز وترتيب النقاط الأربعة للورقة الخارجية
-                let points = [];
-                for (let i = 0; i < 4; i++) {
-                    points.push({ x: paperContour.data32S[i * 2], y: paperContour.data32S[i * 2 + 1] });
-                }
-                
-                // رسم خط خارجي أزرق حول كامل الورقة للتأكيد للمستخدم
-                ctx.strokeStyle = '#0000FF';
+            
+            // رسم خطوط خضراء واضحة على المربعات الحقيقية المكتشفة فقط
+            detectedSquares.forEach(sq => {
+                ctx.strokeStyle = '#00FF00';
                 ctx.lineWidth = 3;
-                ctx.beginPath();
-                ctx.moveTo(points[0].x, points[0].y);
-                for(let i=1; i<4; i++) ctx.lineTo(points[i].x, points[i].y);
-                ctx.closePath();
-                ctx.stroke();
+                ctx.strokeRect(sq.rect.x, sq.rect.y, sq.rect.width, sq.rect.height);
+            });
 
-                points.sort((a, b) => a.y - b.y);
-                let topPoints = points.slice(0, 2).sort((a, b) => a.x - b.x);
-                let bottomPoints = points.slice(2, 4).sort((a, b) => a.x - b.x);
+            // الاعتماد فقط وبشكل حصري على رصد 4 زوايا مطابقة للشروط الصارمة
+            if (detectedSquares.length === 4) {
+                detectionStatus.className = "alert alert-success py-2 mb-2 small text-center";
+                detectionStatus.innerText = "🎯 تم قفل زوايا الورقة الأربعة بنجاح!";
+
+                detectedSquares.sort((a, b) => a.y - b.y);
+                let topPoints = detectedSquares.slice(0, 2).sort((a, b) => a.x - b.x);
+                let bottomPoints = detectedSquares.slice(2, 4).sort((a, b) => a.x - b.x);
 
                 let srcCoords = cv.matFromArray(4, 1, cv.CV_32FC2, [
                     topPoints[0].x, topPoints[0].y, topPoints[1].x, topPoints[1].y,
@@ -188,7 +195,6 @@
                 canvasCropped.style.display = "block";
                 cv.imshow('canvasCropped', croppedMat);
 
-                // --- معالجة وقراءة التضليل الداخلي (OMR) ---
                 let croppedGray = new cv.Mat();
                 let croppedThresh = new cv.Mat();
                 cv.cvtColor(croppedMat, croppedGray, cv.COLOR_RGBA2GRAY);
@@ -198,6 +204,7 @@
                 let studentScore = 0;
                 let studentAnswers = { trueFalse: [], multipleChoice: [], matching: [] };
 
+                // دالة فحص مناطق التضليل (ROI) بناءً على الإحداثيات داخل الورقة المقصوصة
                 function getSelectedOption(totalOptions, startX, startY, stepX, stepY, qIndex) {
                     let maxPixels = 0;
                     let selectedIndex = -1;
@@ -212,7 +219,7 @@
                             let pixelCount = cv.countNonZero(roi);
                             roi.delete();
 
-                            if (pixelCount > maxPixels && pixelCount > 65) {
+                            if (pixelCount > maxPixels && pixelCount > 75) {
                                 maxPixels = pixelCount;
                                 selectedIndex = opt;
                             }
@@ -223,21 +230,21 @@
 
                 const optionsLabels = ["أ", "ب", "ج", "د", "هـ"];
 
-                // تصحيح الأسئلة بناءً على الأبعاد الجديدة لكامل الورقة المقصوصة
+                // قراءة وفحص إجابات الطالب
                 for (let i = 0; i < 5; i++) {
-                    let ans = getSelectedOption(2, 380, 250, -45, 30, i);
+                    let ans = getSelectedOption(2, 380, 150, -45, 30, i);
                     studentAnswers.trueFalse.push(ans === -1 ? "فارغ" : (ans === 0 ? "ص" : "خ"));
                     if (ans === currentAnswerKey.trueFalse[i]) studentScore++;
                 }
 
                 for (let i = 0; i < 10; i++) {
-                    let ans = getSelectedOption(4, 220, 250, -32, 30, i);
+                    let ans = getSelectedOption(4, 220, 150, -32, 30, i);
                     studentAnswers.multipleChoice.push(ans === -1 ? "فارغ" : optionsLabels[ans]);
                     if (ans === currentAnswerKey.multipleChoice[i]) studentScore++;
                 }
 
                 for (let i = 0; i < 5; i++) {
-                    let ans = getSelectedOption(5, 80, 250, -28, 30, i);
+                    let ans = getSelectedOption(5, 80, 150, -28, 30, i);
                     studentAnswers.matching.push(ans === -1 ? "فارغ" : optionsLabels[ans]);
                     if (ans === currentAnswerKey.matching[i]) studentScore++;
                 }
@@ -253,12 +260,9 @@
 
                 srcCoords.delete(); dstCoords.delete(); M.delete(); 
                 croppedMat.delete(); croppedGray.delete(); croppedThresh.delete();
-                paperContour.delete();
             } else {
                 detectionStatus.className = "alert alert-danger py-2 mb-2 small text-center";
-                detectionStatus.innerText = "جاري البحث عن كامل الورقة... ضع الورقة على سطح داكن (طاولة خشبية أو غامقة) لتلتقط فوراً وبشكل أسرع.";
-                canvasCropped.style.display = "none";
-                scoreContainer.style.display = "none";
+                detectionStatus.innerText = `جاري تثبيت الزوايا الأربعة... (تم رصد ${detectedSquares.length}/4 زوايا صحيحة)`;
             }
 
             requestAnimationFrame(processVideo);
