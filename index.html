@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>مصحح الأوراق الذكي - نسخة مستقرة</title>
+    <title>مصحح الأوراق الذكي - نسخة معايرة وسريعة</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { background-color: #f1f3f5; font-family: sans-serif; text-align: center; }
@@ -18,21 +18,21 @@
 <body>
 
     <div class="container my-3">
-        <h2 class="text-primary fw-bold mb-1">مصحح الأوراق الإلكتروني المستقر 🎯</h2>
+        <h2 class="text-primary fw-bold mb-1">مصحح الأوراق الإلكتروني الفوري 🎯</h2>
         
         <div class="config-box">
             <h5 class="text-primary border-bottom pb-2">🛠️ إعداد مفتاح الإجابة النموذجية</h5>
             <div class="mb-2">
-                <label class="form-label fw-bold small">1. قسم صح (ص) / خطأ (خ) - [5 أسئلة من اليمين لليسار]:</label>
-                <input type="text" id="key-tf" class="form-control form-control-sm text-center" value="ص,خ,ص,ص,خ" placeholder="اكتب مثل: ص,خ,ص,ص,خ">
+                <label class="form-label fw-bold small">1. قسم صح (ص) / خطأ (خ) - [5 أسئلة]:</label>
+                <input type="text" id="key-tf" class="form-control form-control-sm text-center" value="ص,خ,ص,ص,خ">
             </div>
             <div class="mb-2">
                 <label class="form-label fw-bold small">2. الاختيار من متعدد - [10 أسئلة من أ إلى د]:</label>
-                <input type="text" id="key-mc" class="form-control form-control-sm text-center" value="أ,ب,ج,د,أ,ب,ج,د,أ,ب" placeholder="اكتب مثل: أ,ب,ج,د...">
+                <input type="text" id="key-mc" class="form-control form-control-sm text-center" value="أ,ب,ج,د,أ,ب,ج,د,أ,ب">
             </div>
             <div class="mb-2">
                 <label class="form-label fw-bold small">3. قسم المزاوجة - [5 أسئلة من أ إلى هـ]:</label>
-                <input type="text" id="key-match" class="form-control form-control-sm text-center" value="أ,ج,هـ,ب,د" placeholder="اكتب مثل: أ,ب,ج,د,هـ">
+                <input type="text" id="key-match" class="form-control form-control-sm text-center" value="أ,ج,هـ,ب,د">
             </div>
         </div>
 
@@ -67,7 +67,7 @@
         const finalScoreDiv = document.getElementById('final-score');
         const detailsText = document.getElementById('details-text');
         
-        let src, gray, blurred, thresh, contours, hierarchy;
+        let src, gray, thresh, contours, hierarchy;
         let streaming = false;
 
         navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: 640, height: 480 }, audio: false })
@@ -76,7 +76,7 @@
 
         function onOpenCvReady() {
             detectionStatus.className = "alert alert-info py-2 mb-2 small text-center";
-            detectionStatus.innerText = "ثبّت الكاميرا فوق الورقة بالكامل في إضاءة جيدة...";
+            detectionStatus.innerText = "المحرك جاهز! وجه الكاميرا للورقة بالكامل...";
             
             video.addEventListener('canplay', () => {
                 if (!streaming) {
@@ -87,7 +87,6 @@
 
                     src = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
                     gray = new cv.Mat();
-                    blurred = new cv.Mat();
                     thresh = new cv.Mat();
                     contours = new cv.MatVector();
                     hierarchy = new cv.Mat();
@@ -98,16 +97,17 @@
             });
         }
 
-        // تحويل النص المدخل من الواجهة إلى مصفوفة برمجة مدعومة
         function getAnswerKeysFromUI() {
             const mapTF = {"ص": 0, "خ": 1};
             const mapLetters = {"أ": 0, "ب": 1, "ج": 2, "د": 3, "هـ": 4};
-            
-            let tfArr = document.getElementById('key-tf').value.split(',').map(s => mapTF[s.trim()]);
-            let mcArr = document.getElementById('key-mc').value.split(',').map(s => mapLetters[s.trim()]);
-            let matchArr = document.getElementById('key-match').value.split(',').map(s => mapLetters[s.trim()]);
-            
-            return { trueFalse: tfArr, multipleChoice: mcArr, matching: matchArr };
+            try {
+                let tfArr = document.getElementById('key-tf').value.split(',').map(s => mapTF[s.trim()] !== undefined ? mapTF[s.trim()] : 0);
+                let mcArr = document.getElementById('key-mc').value.split(',').map(s => mapLetters[s.trim()] !== undefined ? mapLetters[s.trim()] : 0);
+                let matchArr = document.getElementById('key-match').value.split(',').map(s => mapLetters[s.trim()] !== undefined ? mapLetters[s.trim()] : 0);
+                return { trueFalse: tfArr, multipleChoice: mcArr, matching: matchArr };
+            } catch(e) {
+                return { trueFalse: [0,0,0,0,0], multipleChoice: [0,0,0,0,0,0,0,0,0,0], matching: [0,0,0,0,0] };
+            }
         }
 
         function processVideo() {
@@ -117,15 +117,10 @@
             let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
             src.data.set(imageData.data);
 
-            // تحويل الصورة لرمادي
             cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
             
-            // [حل المشكلة 1] إضافة تمويه لتنظيف الصورة ومنع اهتزاز المظاهر العشوائية
-            let ksize = new cv.Size(5, 5);
-            cv.GaussianBlur(gray, blurred, ksize, 0, 0, cv.BORDER_DEFAULT);
-            
-            // تحويل لأبيض وأسود حاد
-            cv.adaptiveThreshold(blurred, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
+            // عدنا لعتبة التصفية الحادة والمرنة بدون تمويه معقد لضمان سرعة الالتقاط
+            cv.adaptiveThreshold(gray, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
             cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
             let detectedSquares = [];
@@ -134,13 +129,14 @@
                 let cnt = contours.get(i);
                 let perimeter = cv.arcLength(cnt, true);
                 let approx = new cv.Mat();
-                cv.approxPolyDP(cnt, approx, 0.03 * perimeter, true);
+                // أعدنا النسبة إلى 0.04 لمرونة كشف الزوايا الأربع
+                cv.approxPolyDP(cnt, approx, 0.04 * perimeter, true);
 
-                // [حل المشكلة 1] رفع الحد الأدنى للمساحة (تجاهل الأشكال الصغيرة خارج الورقة)
-                if (approx.rows === 4 && cv.contourArea(cnt) > 400 && cv.contourArea(cnt) < 5000) {
+                // نطاق مساحة مرن جداً يبدأ من 80 بكسل إلى 4000 بكسل ليلقط المربعات فوراً
+                if (approx.rows === 4 && cv.contourArea(cnt) > 80 && cv.contourArea(cnt) < 4000) {
                     let rect = cv.boundingRect(cnt);
                     let aspectRatio = rect.width / rect.height;
-                    if (aspectRatio >= 0.75 && aspectRatio <= 1.25) {
+                    if (aspectRatio >= 0.7 && aspectRatio <= 1.3) {
                         detectedSquares.push({ x: rect.x + rect.width/2, y: rect.y + rect.height/2, rect: rect });
                     }
                 }
@@ -149,17 +145,16 @@
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
-            // رسم المؤشرات الخضراء المحدثة
             detectedSquares.forEach(sq => {
                 ctx.strokeStyle = '#00FF00';
-                ctx.lineWidth = 3;
+                ctx.lineWidth = 2;
                 ctx.strokeRect(sq.rect.x, sq.rect.y, sq.rect.width, sq.rect.height);
             });
 
-            // عندما يستقر النظام على 4 زوايا دقيقة ومطابقة تماماً
+            // عندما يجد البرنامج 4 زوايا دقيقة
             if (detectedSquares.length === 4) {
                 detectionStatus.className = "alert alert-success py-2 mb-2 small text-center";
-                detectionStatus.innerText = "🎯 تم تثبيت زوايا الورقة بنجاح وجاري التصحيح!";
+                detectionStatus.innerText = "🎯 تم التقاط زوايا الورقة وجاري التصحيح!";
 
                 detectedSquares.sort((a, b) => a.y - b.y);
                 let topPoints = detectedSquares.slice(0, 2).sort((a, b) => a.x - b.x);
@@ -183,7 +178,6 @@
                 cv.cvtColor(croppedMat, croppedGray, cv.COLOR_RGBA2GRAY);
                 cv.threshold(croppedGray, croppedThresh, 0, 255, cv.THRESH_BINARY_INV | cv.THRESH_OTSU);
 
-                // استدعاء مفتاح الإجابة المحدث من المدخلات الحالية
                 const currentAnswerKey = getAnswerKeysFromUI();
                 let studentScore = 0;
                 let studentAnswers = { trueFalse: [], multipleChoice: [], matching: [] };
@@ -202,7 +196,7 @@
                             let pixelCount = cv.countNonZero(roi);
                             roi.delete();
 
-                            if (pixelCount > maxPixels && pixelCount > 90) {
+                            if (pixelCount > maxPixels && pixelCount > 70) {
                                 maxPixels = pixelCount;
                                 selectedIndex = opt;
                             }
@@ -213,7 +207,6 @@
 
                 const optionsLabels = ["أ", "ب", "ج", "د", "هـ"];
 
-                // تصحيح الأقسام بناءً على النموذج المُدخل
                 for (let i = 0; i < 5; i++) {
                     let ans = getSelectedOption(2, 380, 150, -45, 30, i);
                     studentAnswers.trueFalse.push(ans === -1 ? "فارغ" : (ans === 0 ? "ص" : "خ"));
@@ -245,7 +238,7 @@
                 croppedMat.delete(); croppedGray.delete(); croppedThresh.delete();
             } else {
                 detectionStatus.className = "alert alert-danger py-2 mb-2 small text-center";
-                detectionStatus.innerText = `جاري التثبيت... (تم رصد ${detectedSquares.length} زوايا صلبة. تحتاج 4 أركان)`;
+                detectionStatus.innerText = `جاري البحث... (تم رصد ${detectedSquares.length} زوايا. تحتاج إلى تثبيت 4 زوايا معاً)`;
             }
 
             requestAnimationFrame(processVideo);
