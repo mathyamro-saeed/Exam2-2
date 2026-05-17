@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>مصحح الأوراق الذكي - نسخة معايرة وسريعة</title>
+    <title>مصحح الأوراق الذكي - معايرة الزوايا السفلية</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { background-color: #f1f3f5; font-family: sans-serif; text-align: center; }
@@ -76,7 +76,7 @@
 
         function onOpenCvReady() {
             detectionStatus.className = "alert alert-info py-2 mb-2 small text-center";
-            detectionStatus.innerText = "المحرك جاهز! وجه الكاميرا للورقة بالكامل...";
+            detectionStatus.innerText = "المحرك جاهز! وجه الكاميرا للورقة بالكامل وتأكد من ظهور الأطراف السفلية...";
             
             video.addEventListener('canplay', () => {
                 if (!streaming) {
@@ -119,8 +119,9 @@
 
             cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
             
-            // عدنا لعتبة التصفية الحادة والمرنة بدون تمويه معقد لضمان سرعة الالتقاط
-            cv.adaptiveThreshold(gray, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
+            // --- تعديل 1: تحسين فلتر التباين للظلال (الزوايا السفلية) ---
+            // تم تقليل قيمة 'C' من 2 إلى 1 (المعلمة الأخيرة)، مما يزيد الحساسية للكشف عن المربعات في المناطق المظلمة.
+            cv.adaptiveThreshold(gray, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 1);
             cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
             let detectedSquares = [];
@@ -129,10 +130,8 @@
                 let cnt = contours.get(i);
                 let perimeter = cv.arcLength(cnt, true);
                 let approx = new cv.Mat();
-                // أعدنا النسبة إلى 0.04 لمرونة كشف الزوايا الأربع
                 cv.approxPolyDP(cnt, approx, 0.04 * perimeter, true);
 
-                // نطاق مساحة مرن جداً يبدأ من 80 بكسل إلى 4000 بكسل ليلقط المربعات فوراً
                 if (approx.rows === 4 && cv.contourArea(cnt) > 80 && cv.contourArea(cnt) < 4000) {
                     let rect = cv.boundingRect(cnt);
                     let aspectRatio = rect.width / rect.height;
@@ -151,18 +150,63 @@
                 ctx.strokeRect(sq.rect.x, sq.rect.y, sq.rect.width, sq.rect.height);
             });
 
-            // عندما يجد البرنامج 4 زوايا دقيقة
+            // --- تعديل 2: خاصية "إكمال الأركان" برمجياً ---
+            let finalPoints;
             if (detectedSquares.length === 4) {
-                detectionStatus.className = "alert alert-success py-2 mb-2 small text-center";
-                detectionStatus.innerText = "🎯 تم التقاط زوايا الورقة وجاري التصحيح!";
-
+                // الحالة الطبيعية: تم رصد الزوايا الأربعة بنجاح
                 detectedSquares.sort((a, b) => a.y - b.y);
                 let topPoints = detectedSquares.slice(0, 2).sort((a, b) => a.x - b.x);
                 let bottomPoints = detectedSquares.slice(2, 4).sort((a, b) => a.x - b.x);
+                
+                finalPoints = [
+                    topPoints[0], topPoints[1],
+                    bottomPoints[1], bottomPoints[0]
+                ];
+            } else if (detectedSquares.length === 3) {
+                // الحالة المعدلة: تم رصد ثلاث زوايا فقط. نقوم بتقدير الزاوية الناقصة (غالباً سفلية).
+                detectedSquares.sort((a, b) => a.y - b.y);
+                let topPoints = detectedSquares.filter(p => p.y < (video.videoHeight / 2));
+                let bottomPoints = detectedSquares.filter(p => p.y >= (video.videoHeight / 2));
+                
+                // التأكد من وجود الزاويتين العلويتين على الأقل
+                if (topPoints.length === 2 && bottomPoints.length === 1) {
+                    let topLeft = topPoints.sort((a, b) => a.x - b.x)[0];
+                    let topRight = topPoints.sort((a, b) => a.x - b.x)[1];
+                    let existingBottom = bottomPoints[0];
+                    
+                    let predictedBottom;
+                    // حساب الزاوية السفلية الناقصة (يسار أو يمين) بناءً على إحداثيات الزوايا الثلاث الأخرى
+                    if (existingBottom.x < (video.videoWidth / 2)) {
+                        // الموجودة أسفل-يسار، الناقصة أسفل-يمين
+                        predictedBottom = {
+                            x: topRight.x + (existingBottom.x - topLeft.x),
+                            y: existingBottom.y + (topRight.y - topLeft.y)
+                        };
+                        finalPoints = [topLeft, topRight, predictedBottom, existingBottom];
+                    } else {
+                        // الموجودة أسفل-يمين، الناقصة أسفل-يسار
+                        predictedBottom = {
+                            x: topLeft.x + (existingBottom.x - topRight.x),
+                            y: existingBottom.y + (topLeft.y - topRight.y)
+                        };
+                        finalPoints = [topLeft, topRight, existingBottom, predictedBottom];
+                    }
+                    // رسم الزاوية المتوقعة بلون مختلف للتأكيد للمستخدم
+                    ctx.fillStyle = '#0000FF'; // أزرق للزاوية المتوقعة
+                    ctx.beginPath();
+                    ctx.arc(predictedBottom.x, predictedBottom.y, 10, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+            }
+
+            // إذا كان لدينا 4 نقاط (أصلية أو متوقعة)
+            if (finalPoints && finalPoints.length === 4) {
+                detectionStatus.className = "alert alert-success py-2 mb-2 small text-center";
+                detectionStatus.innerText = (detectedSquares.length === 4) ? "🎯 تم تثبيت الزوايا بنجاح!" : "🌀 تم تقدير الزاوية الناقصة والمتابعة...";
 
                 let srcCoords = cv.matFromArray(4, 1, cv.CV_32FC2, [
-                    topPoints[0].x, topPoints[0].y, topPoints[1].x, topPoints[1].y,
-                    bottomPoints[1].x, bottomPoints[1].y, bottomPoints[0].x, bottomPoints[0].y
+                    finalPoints[0].x, finalPoints[0].y, finalPoints[1].x, finalPoints[1].y,
+                    finalPoints[2].x, finalPoints[2].y, finalPoints[3].x, finalPoints[3].y
                 ]);
                 let dstCoords = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, 500, 0, 500, 700, 0, 700]);
 
@@ -238,7 +282,12 @@
                 croppedMat.delete(); croppedGray.delete(); croppedThresh.delete();
             } else {
                 detectionStatus.className = "alert alert-danger py-2 mb-2 small text-center";
-                detectionStatus.innerText = `جاري البحث... (تم رصد ${detectedSquares.length} زوايا. تحتاج إلى تثبيت 4 زوايا معاً)`;
+                // تحديث رسالة الحالة لتوجيه المستخدم بشكل أفضل
+                let msg = (detectedSquares.length < 3) ? "جاري البحث عن الورقة... تأكد من الإضاءة وظهور الورقة بالكامل." : "تثبيت الورقة... حافظ على ثباتك.";
+                detectionStatus.innerText = msg;
+                // إخفاء النتيجة عند فقدان الورقة
+                canvasCropped.style.display = "none";
+                scoreContainer.style.display = "none";
             }
 
             requestAnimationFrame(processVideo);
