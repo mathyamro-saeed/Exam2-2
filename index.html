@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>مصحح الأوراق الذكي - معايرة الزوايا السفلية</title>
+    <title>مصحح الأوراق الذكي - تقنية المحاذاة الشاملة</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { background-color: #f1f3f5; font-family: sans-serif; text-align: center; }
@@ -18,7 +18,7 @@
 <body>
 
     <div class="container my-3">
-        <h2 class="text-primary fw-bold mb-1">مصحح الأوراق الإلكتروني الفوري 🎯</h2>
+        <h2 class="text-primary fw-bold mb-1">مصحح الأوراق الإلكتروني السريع 🎯</h2>
         
         <div class="config-box">
             <h5 class="text-primary border-bottom pb-2">🛠️ إعداد مفتاح الإجابة النموذجية</h5>
@@ -67,7 +67,7 @@
         const finalScoreDiv = document.getElementById('final-score');
         const detailsText = document.getElementById('details-text');
         
-        let src, gray, thresh, contours, hierarchy;
+        let src, gray, blurred, thresh, contours, hierarchy;
         let streaming = false;
 
         navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: 640, height: 480 }, audio: false })
@@ -76,7 +76,7 @@
 
         function onOpenCvReady() {
             detectionStatus.className = "alert alert-info py-2 mb-2 small text-center";
-            detectionStatus.innerText = "المحرك جاهز! وجه الكاميرا للورقة بالكامل وتأكد من ظهور الأطراف السفلية...";
+            detectionStatus.innerText = "المحرك جاهز! ضع الورقة على خلفية داكنة (مثل الطاولة الخشبية) ليتم التقاطها فوراً...";
             
             video.addEventListener('canplay', () => {
                 if (!streaming) {
@@ -87,6 +87,7 @@
 
                     src = new cv.Mat(video.videoHeight, video.videoWidth, cv.CV_8UC4);
                     gray = new cv.Mat();
+                    blurred = new cv.Mat();
                     thresh = new cv.Mat();
                     contours = new cv.MatVector();
                     hierarchy = new cv.Mat();
@@ -119,94 +120,64 @@
 
             cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
             
-            // --- تعديل 1: تحسين فلتر التباين للظلال (الزوايا السفلية) ---
-            // تم تقليل قيمة 'C' من 2 إلى 1 (المعلمة الأخيرة)، مما يزيد الحساسية للكشف عن المربعات في المناطق المظلمة.
-            cv.adaptiveThreshold(gray, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 1);
-            cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+            // تنعيم الصورة للتخلص من أي شوائب صغيرة أو تظليلات خاطئة
+            let ksize = new cv.Size(5, 5);
+            cv.GaussianBlur(gray, blurred, ksize, 0, 0, cv.BORDER_DEFAULT);
+            cv.adaptiveThreshold(blurred, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
+            
+            cv.findContours(thresh, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
 
-            let detectedSquares = [];
+            let maxArea = 0;
+            let paperContour = null;
 
+            // البحث عن أكبر مساحة مستطيلة الشكل في الكاميرا (وهي كامل مساحة الورقة البيضاء)
             for (let i = 0; i < contours.size(); ++i) {
                 let cnt = contours.get(i);
-                let perimeter = cv.arcLength(cnt, true);
-                let approx = new cv.Mat();
-                cv.approxPolyDP(cnt, approx, 0.04 * perimeter, true);
+                let area = cv.contourArea(cnt);
+                
+                // يجب أن تكون المساحة كبيرة كفاية (تمثل ورقة الإجابة مقارنة بحجم الشاشة)
+                if (area > 20000) { 
+                    let perimeter = cv.arcLength(cnt, true);
+                    let approx = new cv.Mat();
+                    cv.approxPolyDP(cnt, approx, 0.02 * perimeter, true);
 
-                if (approx.rows === 4 && cv.contourArea(cnt) > 80 && cv.contourArea(cnt) < 4000) {
-                    let rect = cv.boundingRect(cnt);
-                    let aspectRatio = rect.width / rect.height;
-                    if (aspectRatio >= 0.7 && aspectRatio <= 1.3) {
-                        detectedSquares.push({ x: rect.x + rect.width/2, y: rect.y + rect.height/2, rect: rect });
+                    if (approx.rows === 4 && area > maxArea) {
+                        maxArea = area;
+                        paperContour = approx.clone();
                     }
+                    approx.delete();
                 }
-                approx.delete();
             }
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            
-            detectedSquares.forEach(sq => {
-                ctx.strokeStyle = '#00FF00';
-                ctx.lineWidth = 2;
-                ctx.strokeRect(sq.rect.x, sq.rect.y, sq.rect.width, sq.rect.height);
-            });
 
-            // --- تعديل 2: خاصية "إكمال الأركان" برمجياً ---
-            let finalPoints;
-            if (detectedSquares.length === 4) {
-                // الحالة الطبيعية: تم رصد الزوايا الأربعة بنجاح
-                detectedSquares.sort((a, b) => a.y - b.y);
-                let topPoints = detectedSquares.slice(0, 2).sort((a, b) => a.x - b.x);
-                let bottomPoints = detectedSquares.slice(2, 4).sort((a, b) => a.x - b.x);
-                
-                finalPoints = [
-                    topPoints[0], topPoints[1],
-                    bottomPoints[1], bottomPoints[0]
-                ];
-            } else if (detectedSquares.length === 3) {
-                // الحالة المعدلة: تم رصد ثلاث زوايا فقط. نقوم بتقدير الزاوية الناقصة (غالباً سفلية).
-                detectedSquares.sort((a, b) => a.y - b.y);
-                let topPoints = detectedSquares.filter(p => p.y < (video.videoHeight / 2));
-                let bottomPoints = detectedSquares.filter(p => p.y >= (video.videoHeight / 2));
-                
-                // التأكد من وجود الزاويتين العلويتين على الأقل
-                if (topPoints.length === 2 && bottomPoints.length === 1) {
-                    let topLeft = topPoints.sort((a, b) => a.x - b.x)[0];
-                    let topRight = topPoints.sort((a, b) => a.x - b.x)[1];
-                    let existingBottom = bottomPoints[0];
-                    
-                    let predictedBottom;
-                    // حساب الزاوية السفلية الناقصة (يسار أو يمين) بناءً على إحداثيات الزوايا الثلاث الأخرى
-                    if (existingBottom.x < (video.videoWidth / 2)) {
-                        // الموجودة أسفل-يسار، الناقصة أسفل-يمين
-                        predictedBottom = {
-                            x: topRight.x + (existingBottom.x - topLeft.x),
-                            y: existingBottom.y + (topRight.y - topLeft.y)
-                        };
-                        finalPoints = [topLeft, topRight, predictedBottom, existingBottom];
-                    } else {
-                        // الموجودة أسفل-يمين، الناقصة أسفل-يسار
-                        predictedBottom = {
-                            x: topLeft.x + (existingBottom.x - topRight.x),
-                            y: existingBottom.y + (topLeft.y - topRight.y)
-                        };
-                        finalPoints = [topLeft, topRight, existingBottom, predictedBottom];
-                    }
-                    // رسم الزاوية المتوقعة بلون مختلف للتأكيد للمستخدم
-                    ctx.fillStyle = '#0000FF'; // أزرق للزاوية المتوقعة
-                    ctx.beginPath();
-                    ctx.arc(predictedBottom.x, predictedBottom.y, 10, 0, 2 * Math.PI);
-                    ctx.fill();
-                }
-            }
-
-            // إذا كان لدينا 4 نقاط (أصلية أو متوقعة)
-            if (finalPoints && finalPoints.length === 4) {
+            // إذا عثرنا على محيط الورقة الخارجي بالكامل
+            if (paperContour !== null) {
                 detectionStatus.className = "alert alert-success py-2 mb-2 small text-center";
-                detectionStatus.innerText = (detectedSquares.length === 4) ? "🎯 تم تثبيت الزوايا بنجاح!" : "🌀 تم تقدير الزاوية الناقصة والمتابعة...";
+                detectionStatus.innerText = "🎯 تم تحديد حدود الورقة وجاري القراءة والدرجة فوراً!";
+
+                // فرز وترتيب النقاط الأربعة للورقة الخارجية
+                let points = [];
+                for (let i = 0; i < 4; i++) {
+                    points.push({ x: paperContour.data32S[i * 2], y: paperContour.data32S[i * 2 + 1] });
+                }
+                
+                // رسم خط خارجي أزرق حول كامل الورقة للتأكيد للمستخدم
+                ctx.strokeStyle = '#0000FF';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(points[0].x, points[0].y);
+                for(let i=1; i<4; i++) ctx.lineTo(points[i].x, points[i].y);
+                ctx.closePath();
+                ctx.stroke();
+
+                points.sort((a, b) => a.y - b.y);
+                let topPoints = points.slice(0, 2).sort((a, b) => a.x - b.x);
+                let bottomPoints = points.slice(2, 4).sort((a, b) => a.x - b.x);
 
                 let srcCoords = cv.matFromArray(4, 1, cv.CV_32FC2, [
-                    finalPoints[0].x, finalPoints[0].y, finalPoints[1].x, finalPoints[1].y,
-                    finalPoints[2].x, finalPoints[2].y, finalPoints[3].x, finalPoints[3].y
+                    topPoints[0].x, topPoints[0].y, topPoints[1].x, topPoints[1].y,
+                    bottomPoints[1].x, bottomPoints[1].y, bottomPoints[0].x, bottomPoints[0].y
                 ]);
                 let dstCoords = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, 500, 0, 500, 700, 0, 700]);
 
@@ -217,6 +188,7 @@
                 canvasCropped.style.display = "block";
                 cv.imshow('canvasCropped', croppedMat);
 
+                // --- معالجة وقراءة التضليل الداخلي (OMR) ---
                 let croppedGray = new cv.Mat();
                 let croppedThresh = new cv.Mat();
                 cv.cvtColor(croppedMat, croppedGray, cv.COLOR_RGBA2GRAY);
@@ -240,7 +212,7 @@
                             let pixelCount = cv.countNonZero(roi);
                             roi.delete();
 
-                            if (pixelCount > maxPixels && pixelCount > 70) {
+                            if (pixelCount > maxPixels && pixelCount > 65) {
                                 maxPixels = pixelCount;
                                 selectedIndex = opt;
                             }
@@ -251,20 +223,21 @@
 
                 const optionsLabels = ["أ", "ب", "ج", "د", "هـ"];
 
+                // تصحيح الأسئلة بناءً على الأبعاد الجديدة لكامل الورقة المقصوصة
                 for (let i = 0; i < 5; i++) {
-                    let ans = getSelectedOption(2, 380, 150, -45, 30, i);
+                    let ans = getSelectedOption(2, 380, 250, -45, 30, i);
                     studentAnswers.trueFalse.push(ans === -1 ? "فارغ" : (ans === 0 ? "ص" : "خ"));
                     if (ans === currentAnswerKey.trueFalse[i]) studentScore++;
                 }
 
                 for (let i = 0; i < 10; i++) {
-                    let ans = getSelectedOption(4, 220, 150, -32, 30, i);
+                    let ans = getSelectedOption(4, 220, 250, -32, 30, i);
                     studentAnswers.multipleChoice.push(ans === -1 ? "فارغ" : optionsLabels[ans]);
                     if (ans === currentAnswerKey.multipleChoice[i]) studentScore++;
                 }
 
                 for (let i = 0; i < 5; i++) {
-                    let ans = getSelectedOption(5, 80, 150, -28, 30, i);
+                    let ans = getSelectedOption(5, 80, 250, -28, 30, i);
                     studentAnswers.matching.push(ans === -1 ? "فارغ" : optionsLabels[ans]);
                     if (ans === currentAnswerKey.matching[i]) studentScore++;
                 }
@@ -280,12 +253,10 @@
 
                 srcCoords.delete(); dstCoords.delete(); M.delete(); 
                 croppedMat.delete(); croppedGray.delete(); croppedThresh.delete();
+                paperContour.delete();
             } else {
                 detectionStatus.className = "alert alert-danger py-2 mb-2 small text-center";
-                // تحديث رسالة الحالة لتوجيه المستخدم بشكل أفضل
-                let msg = (detectedSquares.length < 3) ? "جاري البحث عن الورقة... تأكد من الإضاءة وظهور الورقة بالكامل." : "تثبيت الورقة... حافظ على ثباتك.";
-                detectionStatus.innerText = msg;
-                // إخفاء النتيجة عند فقدان الورقة
+                detectionStatus.innerText = "جاري البحث عن كامل الورقة... ضع الورقة على سطح داكن (طاولة خشبية أو غامقة) لتلتقط فوراً وبشكل أسرع.";
                 canvasCropped.style.display = "none";
                 scoreContainer.style.display = "none";
             }
