@@ -3,50 +3,74 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>مصحح الأوراق الذكي - اقتصاص ومحاذاة</title>
+    <title>مصحح الأوراق الذكي - النسخة النهائية</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
-        body { background-color: #f8f9fa; font-family: sans-serif; text-align: center; }
-        .video-container { position: relative; max-width: 500px; margin: 0 auto; border: 4px solid #0d6efd; border-radius: 10px; overflow: hidden; }
+        body { background-color: #f1f3f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; }
+        .video-container { position: relative; max-width: 480px; margin: 0 auto; border: 4px solid #0d6efd; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 16px rgba(0,0,0,0.15); }
         #videoInput { width: 100%; height: auto; }
         #canvasOutput { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
-        .cropped-container { max-width: 300px; margin: 20px auto; border: 3px dashed #198754; padding: 5px; background: #fff; }
-        #canvasCropped { width: 100%; height: auto; display: none; }
-        .status-box { max-width: 500px; margin: 20px auto; padding: 15px; background: white; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .result-box { max-width: 480px; margin: 15px auto; padding: 15px; background: white; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        #canvasCropped { width: 150px; height: 210px; margin: 5px auto; border: 2px solid #198754; border-radius: 4px; display: none; }
+        .score-badge { font-size: 2rem; font-weight: bold; color: #198754; margin: 10px 0; }
+        .details-table { font-size: 0.85rem; width: 100%; margin-top: 10px; }
     </style>
 </head>
 <body>
 
-    <div class="container my-4">
-        <h1 class="text-primary mb-2">مصحح الأوراق الإلكتروني 📱</h1>
-        <p class="text-muted">الخطوة 3: اقتصاص وتعديل زاوية الورقة تلقائياً</p>
+    <div class="container my-3">
+        <h2 class="text-primary fw-bold mb-1">مصحح الأوراق الإلكتروني الفوري 🎯</h2>
+        <p class="text-muted small">النسخة النهائية: تصحيح ذكي ومباشر عبر الكاميرا</p>
 
         <div class="video-container">
             <video id="videoInput" autoplay playsinline></video>
             <canvas id="canvasOutput"></canvas>
         </div>
 
-        <div class="status-box">
-            <div id="detection-status" class="h5 text-danger">لم يتم العثور على الورقة بعد ❌</div>
-        </div>
-
-        <div class="cropped-container">
-            <p class="text-success fw-bold mb-1">الورقة الملتقطة مستوية ومقصوصة:</p>
+        <div class="result-box">
+            <div id="detection-status" class="alert alert-info py-2 mb-2 small">جاري تحميل النظام...</div>
             <canvas id="canvasCropped"></canvas>
+            
+            <div id="score-container" style="display:none;">
+                <div class="text-secondary small">النتيجة الإجمالية:</div>
+                <div class="score-badge" id="final-score">0 / 20</div>
+                
+                <h6 class="text-start mt-2 border-bottom pb-1 text-dark fw-bold">تفاصيل الإجابات:</h6>
+                <table class="table table-sm table-bordered details-table">
+                    <thead>
+                        <tr class="table-light">
+                            <th>القسم</th>
+                            <th>إجابات الطالب المكتشفة</th>
+                        </tr>
+                    </thead>
+                    <tbody id="details-body" class="text-start">
+                        </tbody>
+                </table>
+            </div>
         </div>
     </div>
 
     <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady();" type="text/javascript"></script>
 
     <script>
+        // --- 1. مفتاح الإجابة النموذجية (يمكنك تعديلها حسب رغبتك) ---
+        // 0 تعني الخيار الأول، 1 الخيار الثاني، إلخ.
+        const ANSWER_KEY = {
+            trueFalse: [0, 1, 0, 0, 1],          // مثال لـ 5 أسئلة صح/خطأ (0=صح، 1=خطأ)
+            multipleChoice: [0, 1, 2, 3, 0, 1, 2, 3, 0, 1], // مثال لـ 10 أسئلة اختياري (0=أ، 1=ب، 2=ج، 3=د)
+            matching: [0, 2, 4, 1, 3]            // مثال لـ 5 أسئلة مزاوجة (0=أ، 1=ب، 2=ج، 3=د، 4=هـ)
+        };
+
         const video = document.getElementById('videoInput');
         const canvas = document.getElementById('canvasOutput');
         const ctx = canvas.getContext('2d');
         const canvasCropped = document.getElementById('canvasCropped');
-        const ctxCropped = canvasCropped.getContext('2d');
         const detectionStatus = document.getElementById('detection-status');
+        const scoreContainer = document.getElementById('score-container');
+        const finalScoreDiv = document.getElementById('final-score');
+        const detailsBody = document.getElementById('details-body');
         
-        let src, dst, gray, thresh, contours, hierarchy;
+        let src, gray, thresh, contours, hierarchy;
         let streaming = false;
 
         navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment", width: 640, height: 480 }, audio: false })
@@ -54,15 +78,13 @@
             .catch(err => alert("خطأ في الكاميرا: " + err));
 
         function onOpenCvReady() {
-            detectionStatus.className = "alert alert-info";
-            detectionStatus.innerText = "🎯 المحرك جاهز، وجه الكاميرا نحو الورقة بالكامل.";
+            detectionStatus.className = "alert alert-warning py-2 mb-2 small";
+            detectionStatus.innerText = "ثبّت الكاميرا فوق الورقة بالكامل لبدء التصحيح...";
             
             video.addEventListener('canplay', () => {
                 if (!streaming) {
                     canvas.width = video.videoWidth;
                     canvas.height = video.videoHeight;
-                    
-                    // الأبعاد الثابتة التي نريد تحويل الورقة المقصوصة إليها (عرض 500 وارتفاع 700 بكسل كمثال مثالي)
                     canvasCropped.width = 500;
                     canvasCropped.height = 700;
 
@@ -101,71 +123,115 @@
                     let rect = cv.boundingRect(cnt);
                     let aspectRatio = rect.width / rect.height;
                     if (aspectRatio >= 0.7 && aspectRatio <= 1.3) {
-                        // حفظ مركز المربع (X, Y) لترتيب الأركان
-                        detectedSquares.push({
-                            x: rect.x + rect.width/2,
-                            y: rect.y + rect.height/2,
-                            rect: rect
-                        });
+                        detectedSquares.push({ x: rect.x + rect.width/2, y: rect.y + rect.height/2, rect: rect });
                     }
                 }
                 approx.delete();
             }
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            // رسم المربعات المرصودة
             detectedSquares.forEach(sq => {
                 ctx.strokeStyle = '#00FF00';
                 ctx.lineWidth = 3;
                 ctx.strokeRect(sq.rect.x, sq.rect.y, sq.rect.width, sq.rect.height);
             });
 
-            // إذا وجدنا المربعات الأربعة بالضبط، نقوم بعملية القص والمحاذاة الذكية
             if (detectedSquares.length === 4) {
-                detectionStatus.className = "h5 text-success animate-pulse";
-                detectionStatus.innerText = "تم رصد أركان الورقة وجاري المحاذاة! 📸";
+                detectionStatus.className = "alert alert-success py-2 mb-2 small";
+                detectionStatus.innerText = "📸 تم التقاط الورقة وتصحيحها فوراً!";
 
-                // ترتيب النقاط الأربعة: [أعلى-يسار, أعلى-يمين, أسفل-يمين, أسفل-يسار]
                 detectedSquares.sort((a, b) => a.y - b.y);
                 let topPoints = detectedSquares.slice(0, 2).sort((a, b) => a.x - b.x);
                 let bottomPoints = detectedSquares.slice(2, 4).sort((a, b) => a.x - b.x);
-                
-                let topLeft = topPoints[0];
-                let topRight = topPoints[1];
-                let bottomLeft = bottomPoints[0];
-                let bottomRight = bottomPoints[1];
 
-                // مصفوفة النقاط المصدرية من الكاميرا
                 let srcCoords = cv.matFromArray(4, 1, cv.CV_32FC2, [
-                    topLeft.x, topLeft.y,
-                    topRight.x, topRight.y,
-                    bottomRight.x, bottomRight.y,
-                    bottomLeft.x, bottomLeft.y
+                    topPoints[0].x, topPoints[0].y, topPoints[1].x, topPoints[1].y,
+                    bottomPoints[1].x, bottomPoints[1].y, bottomPoints[0].x, bottomPoints[0].y
                 ]);
+                let dstCoords = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, 500, 0, 500, 700, 0, 700]);
 
-                // مصفوفة النقاط المستهدفة للقص المستوي (أبعاد الكانفاس الصغير الثابتة)
-                let dstCoords = cv.matFromArray(4, 1, cv.CV_32FC2, [
-                    0, 0,
-                    500, 0,
-                    500, 700,
-                    0, 700
-                ]);
-
-                // حساب مصفوفة التحويل الهندسي واقتصاص الصورة
                 let M = cv.getPerspectiveTransform(srcCoords, dstCoords);
                 let croppedMat = new cv.Mat();
                 cv.warpPerspective(src, croppedMat, M, new cv.Size(500, 700));
 
-                // عرض الورقة المقصوصة والمستقيمة للمستخدم في الكانفاس الصغير
                 canvasCropped.style.display = "block";
                 cv.imshow('canvasCropped', croppedMat);
 
-                // تنظيف المصفوفات لتوفير الذاكرة
-                srcCoords.delete(); dstCoords.delete(); M.delete(); croppedMat.delete();
+                // --- البدء في معالجة وفحص التضليل (OMR Logic) ---
+                let croppedGray = new cv.Mat();
+                let croppedThresh = new cv.Mat();
+                cv.cvtColor(croppedMat, croppedGray, cv.COLOR_RGBA2GRAY);
+                cv.threshold(croppedGray, croppedThresh, 0, 255, cv.THRESH_BINARY_INV | cv.THRESH_OTSU);
+
+                let studentScore = 0;
+                let studentAnswers = { trueFalse: [], multipleChoice: [], matching: [] };
+
+                // دالة لفحص الخيار المظلل في سؤال معين بناءً على إحداثيات الدوائر
+                function getSelectedOption(totalOptions, startX, startY, stepX, stepY, qIndex) {
+                    let maxPixels = 0;
+                    let selectedIndex = -1;
+
+                    for (let opt = 0; opt < totalOptions; opt++) {
+                        // حساب إحداثيات مركز دائرة الخيار الحالي بناءً على هندسة الورقة المرفوعة
+                        let x = Math.round(startX + (opt * stepX));
+                        let y = Math.round(startY + (qIndex * stepY));
+
+                        // إنشاء منطقة فحص دائرية صغيرة (ROI) حول مركز الدائرة
+                        let rect = new cv.Rect(x - 8, y - 8, 16, 16);
+                        if (rect.x >= 0 && rect.y >= 0 && rect.x + rect.width <= 500 && rect.y + rect.height <= 700) {
+                            let roi = croppedThresh.roi(rect);
+                            let pixelCount = cv.countNonZero(roi); // عد البكسلات المظللة (البيضاء بعد العكس)
+                            roi.delete();
+
+                            // إذا كانت الدائرة ممتلئة بالتضليل بشكل ملحوظ وتتجاوز عتبة دنيا من البكسلات
+                            if (pixelCount > maxPixels && pixelCount > 80) {
+                                maxPixels = pixelCount;
+                                selectedIndex = opt;
+                            }
+                        }
+                    }
+                    return selectedIndex;
+                }
+
+                const optionsLabels = ["أ", "ب", "ج", "د", "هـ"];
+
+                // 1. فحص قسم صح وخطأ (5 أسئلة، يبدأ برمجياً من الأعلى الأيمن للورقة)
+                for (let i = 0; i < 5; i++) {
+                    let ans = getSelectedOption(2, 380, 150, -45, 30, i); // إحداثيات تقريبية للعمود الأول
+                    studentAnswers.trueFalse.push(ans === -1 ? "لم يظلل" : (ans === 0 ? "صح" : "خطأ"));
+                    if (ans === ANSWER_KEY.trueFalse[i]) studentScore++;
+                }
+
+                // 2. فحص قسم الاختيار من متعدد (10 أسئلة)
+                for (let i = 0; i < 10; i++) {
+                    let ans = getSelectedOption(4, 220, 150, -32, 30, i); // إحداثيات العمود الأوسط
+                    studentAnswers.multipleChoice.push(ans === -1 ? "لم يظلل" : optionsLabels[ans]);
+                    if (ans === ANSWER_KEY.multipleChoice[i]) studentScore++;
+                }
+
+                // 3. فحص قسم المزاوجة (5 أسئلة)
+                for (let i = 0; i < 5; i++) {
+                    let ans = getSelectedOption(5, 80, 150, -28, 30, i); // إحداثيات العمود الأيسر
+                    studentAnswers.matching.push(ans === -1 ? "لم يظلل" : optionsLabels[ans]);
+                    if (ans === ANSWER_KEY.matching[i]) studentScore++;
+                }
+
+                // تحديث الواجهة بالنتيجة
+                scoreContainer.style.display = "block";
+                finalScoreDiv.innerText = `${studentScore} / 20`;
+                
+                detailsBody.innerHTML = `
+                    <tr><td><b>صح / خطأ:</b></td><td>${studentAnswers.trueFalse.join(', ')}</td></tr>
+                    <tr><td><b>الاختياري:</b></td><td>${studentAnswers.multipleChoice.join(', ')}</td></tr>
+                    <tr><td><b>المزاوجة:</b></td><td>${studentAnswers.matching.join(', ')}</td></tr>
+                `;
+
+                // تنظيف الذاكرة المؤقتة
+                srcCoords.delete(); dstCoords.delete(); M.delete(); 
+                croppedMat.delete(); croppedGray.delete(); croppedThresh.delete();
             } else {
-                detectionStatus.className = "h5 text-danger";
-                detectionStatus.innerText = `جاري البحث... (تم رصد ${detectedSquares.length} من أركان الورقة)`;
+                detectionStatus.className = "alert alert-danger py-2 mb-2 small";
+                detectionStatus.innerText = `جاري البحث... ثبّت الورقة (تم رصد ${detectedSquares.length}/4 أركان)`;
             }
 
             requestAnimationFrame(processVideo);
